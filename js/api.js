@@ -1,151 +1,93 @@
-// Apex University API Client Layer
-// This file connects the Frontend UI with the Backend REST API.
+const API_BASE_URL = "http://localhost:5000/api";
+const departmentCodes = {
+  "Computer Science": "CS",
+  "Software Engineering": "SE",
+  "Artificial Intelligence": "AI",
+  "Business Administration": "BBA",
+  "Electrical Engineering": "EE",
+};
 
-// ⚙️ CONFIGURATION:
-// Jab backend developer local chalaye toh: 'http://localhost:5000/api'
-// Jab backend deploy ho jaye (Render/Railway par) toh: 'https://your-backend.onrender.com/api'
-const API_BASE_URL = 'http://localhost:5000/api';
+const logout = () => {
+  localStorage.removeItem("auth_token");
+  localStorage.removeItem("auth_user");
+  localStorage.removeItem("user_role");
+  window.dispatchEvent(new CustomEvent("portal:logout"));
+};
 
-// Agar backend band ho ya abhi tak connect na hua ho, toh true rakhein (Demo data chalega).
-// Jab backend chal jaye toh isko false kar dein (Real database chalega).
-const USE_MOCK_FALLBACK = true;
+const request = async (path, options = {}) => {
+  const headers = {
+    "Content-Type": "application/json",
+    ...(options.headers || {}),
+  };
+  const token = localStorage.getItem("auth_token");
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, { ...options, headers });
+  } catch {
+    throw new Error("Could not reach the server. Is the backend running?");
+  }
+
+  let body = null;
+  try {
+    body = await response.json();
+  } catch {
+    body = null;
+  }
+
+  if (response.status === 401 && !options.skipAuth) {
+    logout();
+  }
+  if (!response.ok) {
+    throw new Error(body?.message || `Request failed (${response.status})`);
+  }
+  return body;
+};
+
+const saveSession = (data) => {
+  localStorage.setItem("auth_token", data.token);
+  localStorage.setItem("auth_user", JSON.stringify(data.user));
+  localStorage.setItem("user_role", data.user.role);
+};
 
 const ApiService = {
-  // Helper to attach JWT Bearer token
-  getHeaders() {
-    const token = localStorage.getItem('auth_token');
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-    };
+  get user() {
+    try {
+      return JSON.parse(localStorage.getItem("auth_user") || "null");
+    } catch {
+      return null;
+    }
   },
-
-  // ==================== 1. AUTHENTICATION ====================
+  hasSession() {
+    return Boolean(localStorage.getItem("auth_token") && this.user);
+  },
   async login(email, password) {
-    try {
-      const res = await fetch(`${API_BASE_URL}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
-      });
-      if (!res.ok) throw new Error('Invalid credentials');
-      const data = await res.json();
-      localStorage.setItem('auth_token', data.token);
-      localStorage.setItem('user_role', data.user.role);
-      return data;
-    } catch (err) {
-      if (USE_MOCK_FALLBACK) {
-        console.warn('[API] Backend offline. Using demo login.');
-        return { token: 'mock-jwt-token', user: { email, role: 'admin', name: 'Demo User' } };
-      }
-      throw err;
-    }
+    const data = await request("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+      skipAuth: true,
+    });
+    saveSession(data);
+    return data;
   },
-
-  // ==================== 2. STUDENTS (CRUD) ====================
-  async getStudents() {
-    try {
-      const res = await fetch(`${API_BASE_URL}/students`, {
-        headers: this.getHeaders()
-      });
-      if (!res.ok) throw new Error('Failed to fetch students');
-      return await res.json();
-    } catch (err) {
-      if (USE_MOCK_FALLBACK) {
-        console.warn('[API] Backend offline. Falling back to CampusDB.students');
-        return CampusDB.students;
-      }
-      throw err;
-    }
-  },
-
-  async addStudent(studentData) {
-    try {
-      const res = await fetch(`${API_BASE_URL}/students`, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify(studentData)
-      });
-      if (!res.ok) throw new Error('Failed to save student in database');
-      return await res.json();
-    } catch (err) {
-      if (USE_MOCK_FALLBACK) {
-        console.warn('[API] Backend offline. Saving temporarily in memory.');
-        studentData.id = 'STU-' + (CampusDB.students.length + 101);
-        CampusDB.students.unshift(studentData);
-        return studentData;
-      }
-      throw err;
-    }
-  },
-
-  // ==================== 3. ATTENDANCE ====================
-  async markAttendance(attendanceData) {
-    // attendanceData: { courseId, date, records: [{ studentId, status: 'present'|'absent'|'late' }] }
-    try {
-      const res = await fetch(`${API_BASE_URL}/attendance/mark`, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify(attendanceData)
-      });
-      if (!res.ok) throw new Error('Failed to record attendance');
-      return await res.json();
-    } catch (err) {
-      if (USE_MOCK_FALLBACK) {
-        console.warn('[API] Backend offline. Simulated attendance save.');
-        return { success: true, message: 'Simulated attendance save' };
-      }
-      throw err;
-    }
-  },
-
-  // ==================== 4. GRADEBOOK / MARKS ====================
-  async saveGrades(courseId, gradeRecords) {
-    try {
-      const res = await fetch(`${API_BASE_URL}/grades/save`, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify({ courseId, grades: gradeRecords })
-      });
-      if (!res.ok) throw new Error('Failed to update grades in database');
-      return await res.json();
-    } catch (err) {
-      if (USE_MOCK_FALLBACK) {
-        console.warn('[API] Backend offline. Simulated grades save.');
-        return { success: true };
-      }
-      throw err;
-    }
-  },
-
-  // ==================== 5. NOTICES ====================
-  async getNotices() {
-    try {
-      const res = await fetch(`${API_BASE_URL}/notices`, { headers: this.getHeaders() });
-      if (!res.ok) throw new Error('Failed to fetch notices');
-      return await res.json();
-    } catch (err) {
-      if (USE_MOCK_FALLBACK) return CampusDB.notices;
-      throw err;
-    }
-  },
-
-  async publishNotice(noticeData) {
-    try {
-      const res = await fetch(`${API_BASE_URL}/notices`, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify(noticeData)
-      });
-      if (!res.ok) throw new Error('Failed to publish notice');
-      return await res.json();
-    } catch (err) {
-      if (USE_MOCK_FALLBACK) {
-        noticeData.id = CampusDB.notices.length + 1;
-        CampusDB.notices.unshift(noticeData);
-        return noticeData;
-      }
-      throw err;
-    }
-  }
+  logout,
+  getDashboard: () => request("/admin/dashboard"),
+  getCharts: () => request("/admin/charts"),
+  getStudents: (search = "", department = "") =>
+    request(`/students?search=${encodeURIComponent(search)}&department=${encodeURIComponent(departmentCodes[department] || department)}`),
+  addStudent: (data) => request("/students", { method: "POST", body: JSON.stringify(data) }),
+  getFacultyCourses: () => request("/faculty/courses"),
+  getCourseStudents: (courseId) => request(`/faculty/courses/${courseId}/students`),
+  markAttendance: (data) => request("/attendance", { method: "POST", body: JSON.stringify(data) }),
+  getFacultySchedule: () => request("/faculty/schedule"),
+  getStudentOverview: () => request("/student/overview"),
+  getStudentCourses: () => request("/student/courses"),
+  getStudentAttendance: () => request("/student/attendance"),
+  getGpaHistory: () => request("/student/gpa-history"),
+  getFeeVoucher: () => request("/student/fee-voucher"),
+  getTimetable: () => request("/timetable"),
+  addTimetable: (data) => request("/timetable", { method: "POST", body: JSON.stringify(data) }),
+  getNotices: () => request("/notices"),
+  publishNotice: (data) => request("/notices", { method: "POST", body: JSON.stringify(data) }),
 };

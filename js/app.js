@@ -1,851 +1,425 @@
-// Apex University Enterprise Campus Management System Logic
+let currentRole = null;
+let currentTab = null;
+let attendanceState = {};
+let attendanceCourse = null;
+let attendanceStudents = [];
 
-let currentRole = 'admin'; // 'admin', 'faculty', 'student'
-let currentTab = 'admin-dashboard';
-let attendanceState = {}; // Key: studentId, Value: 'present' | 'absent' | 'late'
+const escapeHtml = (value) =>
+  String(value ?? "").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;",
+  }[character]));
 
-document.addEventListener('DOMContentLoaded', () => {
+const showPanelMessage = (container, message, type = "info") => {
+  if (!container) return;
+  container.innerHTML = `<div class="p-4 rounded-xl ${type === "error" ? "bg-rose-50 text-rose-700" : "bg-slate-50 text-slate-500"} text-xs font-semibold">${escapeHtml(message)}</div>`;
+};
+
+const setLoading = (container) => showPanelMessage(container, "Loading...");
+
+document.addEventListener("DOMContentLoaded", () => {
   setupNavigation();
   setupRoleSwitcher();
   setupSearchAndFilters();
   setupModals();
   setupDarkMode();
-  switchRole('admin'); // Default starting role
+  setupLogout();
+  window.addEventListener("portal:logout", showLoginScreen);
+  if (ApiService.hasSession()) {
+    applySession(ApiService.user);
+  } else {
+    showLoginScreen();
+  }
 });
 
-// Switch User Role
-function switchRole(role) {
-  currentRole = role;
-  
-  const roleBadges = document.querySelectorAll('.role-indicator');
-  const roleAvatars = document.querySelectorAll('.user-role-label');
-  const roleUserNames = document.querySelectorAll('.user-name-label');
+function showLoginScreen() {
+  currentRole = null;
+  document.getElementById("role-banner").style.display = "none";
+  document.getElementById("sidebar").style.display = "none";
+  document.querySelector("main").style.display = "none";
 
-  let title = 'System Administrator';
-  let name = 'Admin Office (Superuser)';
-  let defaultTab = 'admin-dashboard';
-
-  if (role === 'faculty') {
-    title = 'Professor & HoD (CS)';
-    name = 'Dr. Tariq Mehmood';
-    defaultTab = 'faculty-dashboard';
-  } else if (role === 'student') {
-    title = 'Undergraduate (BSCS 6th)';
-    name = 'Muhammad Ali Khan';
-    defaultTab = 'student-dashboard';
+  let login = document.getElementById("portal-login");
+  if (!login) {
+    login = document.createElement("div");
+    login.id = "portal-login";
+    login.className = "min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 p-4";
+    login.innerHTML = `
+      <form id="portal-login-form" class="bg-white dark:bg-slate-900 rounded-3xl p-8 shadow-xl border border-slate-200 dark:border-slate-800 w-full max-w-md">
+        <div class="w-12 h-12 rounded-xl bg-gradient-to-tr from-blue-700 to-indigo-600 text-white flex items-center justify-center font-black text-xl mb-5">A</div>
+        <h1 class="text-2xl font-black text-slate-900 dark:text-white">Apex University Portal</h1>
+        <p class="text-xs text-slate-500 mt-1 mb-6">Sign in to continue</p>
+        <label class="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Email</label>
+        <input id="login-email" type="email" required class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 mb-4">
+        <label class="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Password</label>
+        <input id="login-password" type="password" required class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 mb-4">
+        <div id="login-error" class="hidden text-xs font-semibold text-rose-600 mb-4"></div>
+        <button class="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-black">Sign In</button>
+      </form>`;
+    document.body.appendChild(login);
+    login.querySelector("form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const error = document.getElementById("login-error");
+      error.classList.add("hidden");
+      try {
+        const data = await ApiService.login(
+          document.getElementById("login-email").value,
+          document.getElementById("login-password").value,
+        );
+        login.remove();
+        applySession(data.user);
+      } catch (loginError) {
+        error.textContent = loginError.message;
+        error.classList.remove("hidden");
+      }
+    });
   }
-
-  roleBadges.forEach(b => b.textContent = role.toUpperCase());
-  roleAvatars.forEach(a => a.textContent = title);
-  roleUserNames.forEach(n => n.textContent = name);
-
-  // Toggle active class on role switcher buttons
-  document.querySelectorAll('[data-role-switch]').forEach(btn => {
-    if (btn.getAttribute('data-role-switch') === role) {
-      btn.className = 'px-3 py-1.5 rounded-lg text-xs font-bold bg-blue-600 text-white shadow-sm ring-2 ring-blue-400/40 transition flex items-center space-x-1.5';
-    } else {
-      btn.className = 'px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white hover:bg-slate-800/80 transition flex items-center space-x-1.5';
-    }
-  });
-
-  // Show/Hide Sidebar Navigation Sections
-  document.getElementById('nav-admin-group').style.display = (role === 'admin') ? 'block' : 'none';
-  document.getElementById('nav-faculty-group').style.display = (role === 'faculty') ? 'block' : 'none';
-  document.getElementById('nav-student-group').style.display = (role === 'student') ? 'block' : 'none';
-
-  switchTab(defaultTab);
-  showToast(`Switched to ${role.toUpperCase()} View`);
+  login.style.display = "flex";
 }
 
-// Switch Active View Tab
-function switchTab(tabId) {
-  currentTab = tabId;
-
-  document.querySelectorAll('.view-panel').forEach(panel => {
-    panel.classList.add('hidden');
+function applySession(user) {
+  currentRole = user.role;
+  document.getElementById("portal-login")?.remove();
+  document.getElementById("role-banner").style.display = "";
+  document.getElementById("sidebar").style.display = "";
+  document.querySelector("main").style.display = "";
+  document.querySelectorAll(".role-indicator").forEach((item) => { item.textContent = user.role.toUpperCase(); });
+  document.querySelectorAll(".user-name-label").forEach((item) => { item.textContent = user.name; });
+  document.querySelectorAll(".user-role-label").forEach((item) => { item.textContent = `${user.role[0].toUpperCase()}${user.role.slice(1)} Portal`; });
+  document.querySelectorAll("[data-role-switch]").forEach((button) => {
+    button.style.display = button.dataset.roleSwitch === user.role ? "" : "none";
   });
+  document.getElementById("nav-admin-group").style.display = user.role === "admin" ? "block" : "none";
+  document.getElementById("nav-faculty-group").style.display = user.role === "faculty" ? "block" : "none";
+  document.getElementById("nav-student-group").style.display = user.role === "student" ? "block" : "none";
+  const defaultTabs = { admin: "admin-dashboard", faculty: "faculty-dashboard", student: "student-dashboard" };
+  switchTab(defaultTabs[user.role]);
+}
 
+function setupLogout() {
+  const footer = document.querySelector("#sidebar .border-t");
+  if (!footer || footer.querySelector("#logout-button")) return;
+  const button = document.createElement("button");
+  button.id = "logout-button";
+  button.className = "w-full mt-3 py-2 rounded-lg text-xs font-bold text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800";
+  button.textContent = "Logout";
+  button.addEventListener("click", ApiService.logout);
+  footer.appendChild(button);
+}
+
+function switchRole(role) {
+  if (role !== currentRole) return;
+  switchTab({ admin: "admin-dashboard", faculty: "faculty-dashboard", student: "student-dashboard" }[role]);
+}
+
+function switchTab(tabId) {
+  const allowed = tabId.startsWith(`${currentRole}-`);
+  if (!allowed) return;
+  currentTab = tabId;
+  document.querySelectorAll(".view-panel").forEach((panel) => panel.classList.add("hidden"));
   const target = document.getElementById(tabId);
   if (target) {
-    target.classList.remove('hidden');
-    target.classList.add('animate-fade-in');
+    target.classList.remove("hidden");
+    target.classList.add("animate-fade-in");
   }
-
-  // Update sidebar active highlights
-  document.querySelectorAll('.nav-link').forEach(link => {
-    if (link.getAttribute('data-tab') === tabId) {
-      link.classList.add('bg-blue-50', 'text-blue-600', 'font-bold', 'dark:bg-slate-800', 'dark:text-blue-400');
-      link.classList.remove('text-slate-600', 'hover:bg-slate-50', 'dark:text-slate-300');
-    } else {
-      link.classList.remove('bg-blue-50', 'text-blue-600', 'font-bold', 'dark:bg-slate-800', 'dark:text-blue-400');
-      link.classList.add('text-slate-600', 'hover:bg-slate-50', 'dark:text-slate-300');
-    }
+  document.querySelectorAll(".nav-link").forEach((link) => {
+    link.classList.toggle("bg-blue-50", link.dataset.tab === tabId);
+    link.classList.toggle("text-blue-600", link.dataset.tab === tabId);
   });
-
-  // Render dynamic content for the tab
   renderTabData(tabId);
   closeMobileSidebar();
 }
 
 function setupNavigation() {
-  document.querySelectorAll('.nav-link').forEach(link => {
-    link.addEventListener('click', (e) => {
-      e.preventDefault();
-      const tab = link.getAttribute('data-tab');
-      if (tab) switchTab(tab);
-    });
-  });
+  document.querySelectorAll(".nav-link").forEach((link) => link.addEventListener("click", (event) => {
+    event.preventDefault();
+    switchTab(link.dataset.tab);
+  }));
 }
 
 function setupRoleSwitcher() {
-  document.querySelectorAll('[data-role-switch]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const role = btn.getAttribute('data-role-switch');
-      switchRole(role);
-    });
-  });
+  document.querySelectorAll("[data-role-switch]").forEach((button) => button.addEventListener("click", () => switchRole(button.dataset.roleSwitch)));
 }
 
-// Render data based on current active tab
-function renderTabData(tabId) {
-  if (tabId === 'admin-dashboard') {
-    setTimeout(initAdminCharts, 50);
-    renderRecentStudentsList();
-    renderRecentNoticesMini();
-  } else if (tabId === 'admin-students') {
-    renderStudentsTable(CampusDB.students);
-  } else if (tabId === 'admin-faculty') {
-    renderFacultyTable(CampusDB.faculty);
-  } else if (tabId === 'admin-departments') {
-    renderDepartmentsGrid();
-  } else if (tabId === 'admin-timetable') {
-    renderTimetableGrid();
-  } else if (tabId === 'admin-notices' || tabId === 'faculty-notices' || tabId === 'student-notices') {
-    renderNoticesList();
-  } else if (tabId === 'faculty-dashboard') {
-    renderFacultyOverview();
-  } else if (tabId === 'faculty-attendance') {
-    initAttendanceMarker();
-  } else if (tabId === 'faculty-grades') {
-    renderFacultyGradebook();
-  } else if (tabId === 'student-dashboard') {
-    setTimeout(initStudentCharts, 50);
-    renderStudentUpcomingClasses();
-  } else if (tabId === 'student-courses') {
-    renderStudentCourses();
-  } else if (tabId === 'student-attendance') {
-    renderStudentAttendanceDetails();
-  } else if (tabId === 'student-timetable') {
-    renderTimetableGrid('student-timetable-container');
-  } else if (tabId === 'student-challan') {
-    renderFeeChallan();
-  } else if (tabId === 'student-admitcard') {
-    renderAdmitCard();
+async function renderTabData(tabId) {
+  try {
+    if (tabId === "admin-dashboard") await renderAdminDashboard();
+    else if (tabId === "admin-students") await loadStudents();
+    else if (tabId === "admin-faculty" || tabId === "admin-departments" || tabId === "faculty-grades" || tabId === "student-admitcard") {
+      showUnavailable(tabId);
+    } else if (tabId === "admin-timetable" || tabId === "student-timetable") await renderTimetableGrid(tabId === "student-timetable" ? "student-timetable-container" : "admin-timetable-container");
+    else if (tabId.includes("notices")) await renderNoticesList();
+    else if (tabId === "faculty-dashboard") await renderFacultyOverview();
+    else if (tabId === "faculty-attendance") await initAttendanceMarker();
+    else if (tabId === "student-dashboard") await renderStudentDashboard();
+    else if (tabId === "student-courses") await renderStudentCourses();
+    else if (tabId === "student-attendance") await renderStudentAttendanceDetails();
+    else if (tabId === "student-challan") await renderFeeChallan();
+  } catch (error) {
+    showToast(error.message, "error");
   }
 }
 
-// Render Departments Grid
-function renderDepartmentsGrid() {
-  const container = document.getElementById('departments-grid');
-  if (!container) return;
-  container.innerHTML = '';
-
-  CampusDB.departments.forEach(dept => {
-    const card = document.createElement('div');
-    card.className = 'bg-white dark:bg-slate-800 rounded-2xl p-5 border border-slate-200/80 dark:border-slate-700 card-shadow card-shadow-hover flex flex-col justify-between';
-    card.innerHTML = `
-      <div>
-        <div class="flex items-center justify-between mb-3">
-          <span class="font-mono text-xs font-bold px-2.5 py-1 rounded-lg bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-300">${dept.code}</span>
-          <span class="text-xs font-semibold text-slate-500 dark:text-slate-400"><i class="fa-solid fa-flask text-indigo-500 mr-1"></i>${dept.labs} High-Tech Labs</span>
-        </div>
-        <h4 class="font-extrabold text-slate-900 dark:text-white text-base mb-1">${dept.name}</h4>
-        <p class="text-xs text-slate-500 dark:text-slate-400 mb-4"><i class="fa-solid fa-user-tie text-blue-500 mr-1.5"></i>Head of Dept: <strong class="text-slate-700 dark:text-slate-200">${dept.hod}</strong></p>
-        
-        <div class="grid grid-cols-2 gap-2 bg-slate-50 dark:bg-slate-900/50 p-3 rounded-xl mb-4 text-xs">
-          <div><span class="text-slate-400 block text-[11px]">Enrolled Students</span><strong class="text-slate-900 dark:text-white font-bold text-sm">${dept.students}</strong></div>
-          <div><span class="text-slate-400 block text-[11px]">Faculty Members</span><strong class="text-slate-900 dark:text-white font-bold text-sm">${dept.faculty}</strong></div>
-        </div>
-      </div>
-      <div class="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-700/80 text-xs">
-        <span class="text-slate-500">Annual Budget: <strong class="text-emerald-600 font-semibold">${dept.budget}</strong></span>
-        <button onclick="showToast('Viewing full syllabus for ${dept.code}')" class="text-blue-600 hover:underline font-semibold">View Detail &rarr;</button>
-      </div>
-    `;
-    container.appendChild(card);
+async function renderAdminDashboard() {
+  const data = await ApiService.getDashboard();
+  const cards = document.querySelectorAll("#admin-dashboard .grid.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-4 h4");
+  [data.totalStudents, data.totalFaculty, `${data.feeCollectionRate}%`, `${data.averageAttendance}%`].forEach((value, index) => {
+    if (cards[index]) cards[index].textContent = value;
   });
+  const cardNotes = document.querySelectorAll("#admin-dashboard .grid.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-4 p:last-child");
+  ["Live backend count", "Live backend count", "Paid vouchers / all vouchers", "Present + late records"].forEach((value, index) => {
+    if (cardNotes[index]) cardNotes[index].textContent = value;
+  });
+  setTimeout(initAdminCharts, 50);
+  await Promise.all([renderRecentStudentsList(), renderRecentNoticesMini()]);
 }
 
-// Render Students Table (Admin)
 function renderStudentsTable(list) {
-  const tbody = document.getElementById('students-table-body');
+  const tbody = document.getElementById("students-table-body");
   if (!tbody) return;
-  tbody.innerHTML = '';
+  document.getElementById("students-count-badge").textContent = `${list.length} Students`;
+  tbody.innerHTML = list.map((student) => `
+    <tr class="border-b border-slate-100 dark:border-slate-800/80 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition text-xs">
+      <td class="py-3.5 px-4 font-mono font-bold text-blue-600">${escapeHtml(student.rollNo)}</td>
+      <td class="py-3.5 px-4"><div class="font-bold text-slate-800 dark:text-white text-sm">${escapeHtml(student.name)}</div><div class="text-[11px] text-slate-400 font-mono">${escapeHtml(student.email || "—")}</div></td>
+      <td class="py-3.5 px-4 font-medium text-slate-700 dark:text-slate-300">${escapeHtml(student.department)}</td>
+      <td class="py-3.5 px-4 text-center font-bold">${student.semester}</td>
+      <td class="py-3.5 px-4 text-center"><span class="inline-block px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 font-bold font-mono">${Number(student.cgpa).toFixed(2)}</span></td>
+      <td class="py-3.5 px-4 text-center text-slate-400">—</td><td class="py-3.5 px-4 text-center text-slate-400">—</td>
+      <td class="py-3.5 px-4 text-right"><button onclick="viewStudentProfile('${student.id}')" class="px-2.5 py-1 text-xs font-semibold bg-slate-100 rounded-lg">View</button></td>
+    </tr>`).join("");
+}
 
-  const totalEl = document.getElementById('students-count-badge');
-  if (totalEl) totalEl.textContent = `${list.length} Students`;
+async function loadStudents() {
+  const tbody = document.getElementById("students-table-body");
+  setLoading(tbody);
+  const department = document.getElementById("student-dept-filter")?.value || "";
+  const search = document.getElementById("student-search-input")?.value || "";
+  const students = await ApiService.getStudents(search, department === "All" ? "" : department);
+  renderStudentsTable(students);
+}
 
-  list.forEach(stu => {
-    const feeBadge = stu.feeStatus === 'Paid' 
-      ? '<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5"></span>Paid</span>'
-      : (stu.feeStatus === 'Pending' 
-        ? '<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-300 dark:border-rose-800"><span class="w-1.5 h-1.5 rounded-full bg-rose-500 mr-1.5"></span>Pending</span>'
-        : '<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300 dark:border-amber-800"><span class="w-1.5 h-1.5 rounded-full bg-amber-500 mr-1.5"></span>Partial</span>');
-
-    const tr = document.createElement('tr');
-    tr.className = 'border-b border-slate-100 dark:border-slate-800/80 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition text-xs';
-    tr.innerHTML = `
-      <td class="py-3.5 px-4 font-mono font-bold text-blue-600 dark:text-blue-400">${stu.rollNo}</td>
-      <td class="py-3.5 px-4">
-        <div class="font-bold text-slate-800 dark:text-white text-sm">${stu.name}</div>
-        <div class="text-[11px] text-slate-400 font-mono">${stu.email}</div>
-      </td>
-      <td class="py-3.5 px-4 font-medium text-slate-700 dark:text-slate-300">${stu.dept}</td>
-      <td class="py-3.5 px-4 text-center font-bold text-slate-700 dark:text-slate-200">${stu.semester}th</td>
-      <td class="py-3.5 px-4 text-center">
-        <span class="inline-block px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 font-bold text-slate-900 dark:text-white font-mono">${stu.cgpa.toFixed(2)}</span>
-      </td>
-      <td class="py-3.5 px-4 text-center">
-        <div class="font-bold ${stu.attendance < 75 ? 'text-rose-500' : 'text-emerald-600'}">${stu.attendance}%</div>
-        <div class="w-16 mx-auto bg-slate-100 dark:bg-slate-700 h-1.5 rounded-full overflow-hidden mt-1">
-          <div class="h-full ${stu.attendance < 75 ? 'bg-rose-500' : 'bg-emerald-500'}" style="width: ${stu.attendance}%"></div>
-        </div>
-      </td>
-      <td class="py-3.5 px-4 text-center">${feeBadge}</td>
-      <td class="py-3.5 px-4 text-right space-x-1">
-        <button onclick="viewStudentProfile('${stu.id}')" class="px-2.5 py-1 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-200 transition">View</button>
-        <button onclick="showToast('Sent academic warning letter to ${stu.name}')" class="px-2.5 py-1 text-xs font-semibold bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg dark:bg-blue-950/50 dark:text-blue-300 transition">Action</button>
-      </td>
-    `;
-    tbody.appendChild(tr);
+async function renderFacultyOverview() {
+  const courses = await ApiService.getFacultyCourses();
+  const section = document.getElementById("faculty-dashboard");
+  const cards = section.querySelectorAll(".grid.grid-cols-1.md\\:grid-cols-2 > div");
+  courses.forEach((course, index) => {
+    if (!cards[index]) return;
+    cards[index].querySelector("span").textContent = course.code;
+    cards[index].querySelector("h5").textContent = course.title;
+    cards[index].querySelector("p").textContent = `${course.enrolledStudents} Students enrolled • ${course.creditHours} credit hours`;
+    cards[index].querySelector("button").dataset.courseId = course._id;
   });
 }
 
-// Render Faculty Table
-function renderFacultyTable(list) {
-  const tbody = document.getElementById('faculty-table-body');
-  if (!tbody) return;
-  tbody.innerHTML = '';
-
-  list.forEach(f => {
-    const tr = document.createElement('tr');
-    tr.className = 'border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50/70 dark:hover:bg-slate-800/50 transition text-xs';
-    tr.innerHTML = `
-      <td class="py-3.5 px-4">
-        <div class="font-bold text-slate-900 dark:text-white text-sm">${f.name}</div>
-        <div class="text-[11px] text-slate-400">${f.qualification}</div>
-      </td>
-      <td class="py-3.5 px-4">
-        <span class="px-2.5 py-0.5 rounded-md bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300 font-semibold">${f.designation}</span>
-      </td>
-      <td class="py-3.5 px-4 text-slate-600 dark:text-slate-300 font-medium">${f.dept}</td>
-      <td class="py-3.5 px-4 text-slate-600 dark:text-slate-400">${f.courses.join(' • ')}</td>
-      <td class="py-3.5 px-4 font-mono text-slate-500">${f.email}</td>
-      <td class="py-3.5 px-4 text-right">
-        <button onclick="showToast('Office Location: ${f.cabin}')" class="px-3 py-1 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-200">Office Cabin</button>
-      </td>
-    `;
-    tbody.appendChild(tr);
+async function initAttendanceMarker() {
+  const container = document.getElementById("attendance-marking-list");
+  setLoading(container);
+  const courses = await ApiService.getFacultyCourses();
+  attendanceCourse = courses.find((course) => course._id === attendanceCourse?._id) || courses[0];
+  if (!attendanceCourse) {
+    showPanelMessage(container, "No courses are assigned to this faculty member.");
+    return;
+  }
+  attendanceStudents = await ApiService.getCourseStudents(attendanceCourse._id);
+  attendanceStudents.forEach((student) => { attendanceState[student.studentId] ||= "present"; });
+  container.innerHTML = `
+    <select id="attendance-course-select" class="w-full p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold mb-3">
+      ${courses.map((course) => `<option value="${course._id}" ${course._id === attendanceCourse._id ? "selected" : ""}>${escapeHtml(course.code)} — ${escapeHtml(course.title)}</option>`).join("")}
+    </select>
+    ${attendanceStudents.map((student) => attendanceRow(student)).join("")}`;
+  document.getElementById("attendance-course-select").addEventListener("change", async (event) => {
+    attendanceCourse = courses.find((course) => course._id === event.target.value);
+    attendanceStudents = await ApiService.getCourseStudents(attendanceCourse._id);
+    attendanceStudents.forEach((student) => { attendanceState[student.studentId] ||= "present"; });
+    initAttendanceMarker();
   });
 }
 
-// Interactive Attendance Marker for Faculty
-function initAttendanceMarker() {
-  const container = document.getElementById('attendance-marking-list');
-  if (!container) return;
-  container.innerHTML = '';
+function attendanceRow(student) {
+  const status = attendanceState[student.studentId] || "present";
+  return `<div class="flex items-center justify-between p-3.5 bg-white dark:bg-slate-800/80 rounded-xl border border-slate-200 dark:border-slate-700 gap-3">
+    <div><div class="text-sm font-bold">${escapeHtml(student.name)}</div><div class="text-xs text-slate-500 font-mono">${escapeHtml(student.rollNo)}</div></div>
+    <div class="flex space-x-2">${["present", "absent", "late"].map((item) => `<button onclick="setStudentAttendance('${student.studentId}','${item}')" class="px-3 py-1.5 text-xs font-bold rounded-lg ${status === item ? (item === "present" ? "bg-emerald-600 text-white" : item === "absent" ? "bg-rose-600 text-white" : "bg-amber-500 text-white") : "bg-slate-100 dark:bg-slate-700"}">${item[0].toUpperCase() + item.slice(1)}</button>`).join("")}</div>
+  </div>`;
+}
 
-  CampusDB.students.forEach(stu => {
-    if (!attendanceState[stu.id]) attendanceState[stu.id] = 'present';
-
-    const row = document.createElement('div');
-    row.className = 'flex flex-col sm:flex-row sm:items-center justify-between p-3.5 bg-white dark:bg-slate-800/80 rounded-xl border border-slate-200/80 dark:border-slate-700 gap-3 card-shadow';
-    row.innerHTML = `
-      <div class="flex items-center space-x-3.5">
-        <div class="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-300 flex items-center justify-center font-bold text-sm shadow-sm">
-          ${stu.name.charAt(0)}
-        </div>
-        <div>
-          <div class="text-sm font-bold text-slate-900 dark:text-white">${stu.name}</div>
-          <div class="text-xs text-slate-500 dark:text-slate-400 font-mono">${stu.rollNo} • Current Attendance: <strong class="${stu.attendance < 75 ? 'text-rose-500' : 'text-emerald-600'}">${stu.attendance}%</strong></div>
-        </div>
-      </div>
-      <div class="flex items-center space-x-2" id="att-buttons-${stu.id}">
-        <button onclick="setStudentAttendance('${stu.id}', 'present')" class="px-3.5 py-1.5 text-xs font-bold rounded-lg transition ${attendanceState[stu.id] === 'present' ? 'bg-emerald-600 text-white shadow-md' : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-emerald-50'}">
-          <i class="fa-solid fa-check mr-1"></i> Present
-        </button>
-        <button onclick="setStudentAttendance('${stu.id}', 'absent')" class="px-3.5 py-1.5 text-xs font-bold rounded-lg transition ${attendanceState[stu.id] === 'absent' ? 'bg-rose-600 text-white shadow-md' : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-rose-50'}">
-          <i class="fa-solid fa-xmark mr-1"></i> Absent
-        </button>
-        <button onclick="setStudentAttendance('${stu.id}', 'late')" class="px-3.5 py-1.5 text-xs font-bold rounded-lg transition ${attendanceState[stu.id] === 'late' ? 'bg-amber-500 text-white shadow-md' : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-amber-50'}">
-          <i class="fa-solid fa-clock mr-1"></i> Late
-        </button>
-      </div>
-    `;
-    container.appendChild(row);
+function setStudentAttendance(studentId, status) {
+  attendanceState[studentId] = status;
+  document.getElementById("attendance-marking-list").querySelectorAll(".flex.items-center.justify-between").forEach((row, index) => {
+    if (attendanceStudents[index]?.studentId === studentId) row.outerHTML = attendanceRow(attendanceStudents[index]);
   });
 }
 
-function setStudentAttendance(stuId, status) {
-  attendanceState[stuId] = status;
-  initAttendanceMarker();
+async function saveFacultyAttendance() {
+  if (!attendanceCourse) return;
+  try {
+    const result = await ApiService.markAttendance({
+      courseId: attendanceCourse._id,
+      date: new Date().toISOString().slice(0, 10),
+      records: attendanceStudents.map((student) => ({ studentId: student.studentId, status: attendanceState[student.studentId] || "present" })),
+    });
+    showToast(`Attendance saved: ${result.saved} records`, "success");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
 }
 
-function saveFacultyAttendance() {
-  showToast('Attendance recorded and synced to Academic ERP Portal successfully!', 'success');
-}
-
-// Faculty Gradebook Marks Entry
-function renderFacultyGradebook() {
-  const tbody = document.getElementById('faculty-gradebook-body');
-  if (!tbody) return;
-  tbody.innerHTML = '';
-
-  CampusDB.gradebook.forEach((gb, idx) => {
-    const tr = document.createElement('tr');
-    tr.className = 'border-b border-slate-100 dark:border-slate-800 text-xs';
-    tr.innerHTML = `
-      <td class="py-3 px-4 font-mono font-bold text-blue-600">${gb.rollNo}</td>
-      <td class="py-3 px-4 font-semibold text-slate-800 dark:text-white">${gb.name}</td>
-      <td class="py-3 px-3 text-center">
-        <input type="number" min="0" max="15" value="${gb.quiz}" onchange="recalculateGrade(${idx}, this.value, 'quiz')" class="w-14 text-center py-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 font-mono">
-      </td>
-      <td class="py-3 px-3 text-center">
-        <input type="number" min="0" max="15" value="${gb.assign}" onchange="recalculateGrade(${idx}, this.value, 'assign')" class="w-14 text-center py-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 font-mono">
-      </td>
-      <td class="py-3 px-3 text-center">
-        <input type="number" min="0" max="30" value="${gb.mid}" onchange="recalculateGrade(${idx}, this.value, 'mid')" class="w-14 text-center py-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 font-mono">
-      </td>
-      <td class="py-3 px-3 text-center">
-        <input type="number" min="0" max="40" value="${gb.final}" onchange="recalculateGrade(${idx}, this.value, 'final')" class="w-14 text-center py-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 font-mono">
-      </td>
-      <td class="py-3 px-3 text-center font-bold text-slate-900 dark:text-white font-mono" id="gb-total-${idx}">${gb.total} / 100</td>
-      <td class="py-3 px-3 text-center">
-        <span class="px-2.5 py-0.5 rounded-full text-xs font-black bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-300" id="gb-grade-${idx}">${gb.grade}</span>
-      </td>
-    `;
-    tbody.appendChild(tr);
-  });
-}
-
-function recalculateGrade(idx, val, field) {
-  CampusDB.gradebook[idx][field] = parseFloat(val) || 0;
-  const item = CampusDB.gradebook[idx];
-  item.total = item.quiz + item.assign + item.mid + item.final;
-
-  if (item.total >= 90) item.grade = 'A+';
-  else if (item.total >= 85) item.grade = 'A';
-  else if (item.total >= 80) item.grade = 'A-';
-  else if (item.total >= 75) item.grade = 'B+';
-  else if (item.total >= 70) item.grade = 'B';
-  else if (item.total >= 60) item.grade = 'C';
-  else if (item.total >= 50) item.grade = 'D';
-  else item.grade = 'F';
-
-  document.getElementById(`gb-total-${idx}`).textContent = `${item.total} / 100`;
-  document.getElementById(`gb-grade-${idx}`).textContent = item.grade;
-  showToast(`Updated marks for ${item.name}`, 'info');
-}
-
-// Timetable Renderer
-function renderTimetableGrid(containerId = 'admin-timetable-container') {
+async function renderTimetableGrid(containerId = "admin-timetable-container") {
   const container = document.getElementById(containerId);
-  if (!container) return;
-  container.innerHTML = '';
-
-  CampusDB.timetable.forEach(t => {
-    const card = document.createElement('div');
-    card.className = 'bg-white dark:bg-slate-800 rounded-2xl p-5 border border-slate-200/80 dark:border-slate-700 card-shadow';
-    
-    let slotsHtml = t.slots.map(s => `
-      <div class="p-3 mb-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/60 border-l-4 border-blue-500 text-xs">
-        <div class="flex justify-between font-bold text-slate-800 dark:text-slate-200 mb-1">
-          <span class="text-sm">${s.course}</span>
-          <span class="text-blue-600 dark:text-blue-400 font-mono font-semibold">${s.time}</span>
-        </div>
-        <div class="text-slate-500 dark:text-slate-400 flex justify-between items-center mt-1 text-[11px]">
-          <span><i class="fa-solid fa-chalkboard-user mr-1 text-slate-400"></i>${s.teacher}</span>
-          <span class="font-bold px-2 py-0.5 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200">${s.room}</span>
-        </div>
-      </div>
-    `).join('');
-
-    card.innerHTML = `
-      <div class="flex items-center justify-between pb-3 mb-3 border-b border-slate-100 dark:border-slate-700">
-        <h4 class="font-black text-base text-slate-900 dark:text-white">${t.day}</h4>
-        <span class="text-xs px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300 font-mono font-bold">${t.slots.length} Lectures</span>
-      </div>
-      <div>${slotsHtml}</div>
-    `;
-    container.appendChild(card);
-  });
+  setLoading(container);
+  const slots = await ApiService.getTimetable();
+  if (!slots.length) return showPanelMessage(container, "No timetable slots found.");
+  container.innerHTML = slots.map((slot) => `<div class="bg-white dark:bg-slate-800 rounded-2xl p-5 border border-slate-200 dark:border-slate-700 card-shadow">
+    <div class="flex justify-between"><span class="font-mono text-xs font-bold text-blue-600">${escapeHtml(slot.course.code)}</span><span class="text-xs font-bold text-blue-600">${escapeHtml(slot.day)}</span></div>
+    <h4 class="font-extrabold text-slate-900 dark:text-white mt-3">${escapeHtml(slot.course.title)}</h4>
+    <p class="text-xs text-slate-500 mt-2">${escapeHtml(slot.startTime)} • ${escapeHtml(slot.lectureHall)}</p>
+  </div>`).join("");
 }
 
-// Notices Renderer
-function renderNoticesList() {
-  const containers = [
-    document.getElementById('admin-notices-list'),
-    document.getElementById('faculty-notices-list'),
-    document.getElementById('student-notices-list')
-  ];
-
-  containers.forEach(container => {
+async function renderNoticesList() {
+  const notices = await ApiService.getNotices();
+  ["admin-notices-list", "faculty-notices-list", "student-notices-list", "recent-notices-mini"].forEach((id) => {
+    const container = document.getElementById(id);
     if (!container) return;
-    container.innerHTML = '';
-
-    CampusDB.notices.forEach(n => {
-      const priorityBadge = n.priority === 'Urgent' 
-        ? '<span class="px-2.5 py-0.5 text-xs font-bold rounded-full bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300 border border-rose-300">Urgent</span>'
-        : (n.priority === 'High' ? '<span class="px-2.5 py-0.5 text-xs font-bold rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 border border-amber-300">High</span>' : '<span class="px-2.5 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">Normal</span>');
-
-      const item = document.createElement('div');
-      item.className = 'p-5 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200/80 dark:border-slate-700 card-shadow card-shadow-hover';
-      item.innerHTML = `
-        <div class="flex flex-wrap items-center justify-between gap-2 mb-2.5">
-          <div class="flex items-center space-x-2">
-            <span class="text-xs font-bold px-2.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300">${n.category}</span>
-            ${priorityBadge}
-          </div>
-          <span class="text-xs text-slate-400 font-mono"><i class="fa-regular fa-clock mr-1"></i>${n.date}</span>
-        </div>
-        <h4 class="text-base font-extrabold text-slate-900 dark:text-white mb-2">${n.title}</h4>
-        <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed mb-4">${n.content}</p>
-        <div class="text-xs text-slate-400 flex items-center justify-between border-t border-slate-100 dark:border-slate-700/80 pt-3">
-          <span>Authority: <strong class="text-slate-700 dark:text-slate-200">${n.author}</strong></span>
-          <button onclick="showToast('Circular downloaded / pinned to desktop')" class="text-blue-600 hover:underline font-semibold flex items-center space-x-1">
-            <i class="fa-solid fa-download"></i>
-            <span>Download Circular (PDF)</span>
-          </button>
-        </div>
-      `;
-      container.appendChild(item);
-    });
+    container.innerHTML = notices.map((notice) => `<div class="p-4 rounded-xl border-l-4 border-blue-500 bg-slate-50 dark:bg-slate-800/50 mb-3">
+      <div class="flex justify-between text-xs text-slate-400"><span class="font-bold text-blue-600">${escapeHtml(notice.priority)}</span><span>${new Date(notice.date).toLocaleDateString()}</span></div>
+      <div class="font-bold text-slate-800 dark:text-white mt-1">${escapeHtml(notice.title)}</div><div class="text-xs text-slate-500 mt-1">${escapeHtml(notice.message)}</div>
+    </div>`).join("");
   });
 }
 
-// Student Portal Helpers
-function renderStudentCourses() {
-  const container = document.getElementById('student-courses-grid');
+async function renderStudentDashboard() {
+  const [overview, fee] = await Promise.all([ApiService.getStudentOverview(), ApiService.getFeeVoucher()]);
+  const section = document.getElementById("student-dashboard");
+  section.querySelector("h3").textContent = `Welcome, ${overview.name}!`;
+  section.querySelector("h3").nextElementSibling.textContent = `Roll: ${overview.rollNo} • ${overview.department} (${overview.semester}th Semester)`;
+  const cards = section.querySelectorAll(".grid.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-4 h4");
+  [overview.cgpa, `${overview.attendancePercentage}%`, `${overview.totalCreditHours} Cr.`, fee.status.toUpperCase()].forEach((value, index) => { if (cards[index]) cards[index].textContent = value; });
+  const notes = section.querySelectorAll(".grid.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-4 p:last-child");
+  ["From student profile", "Present + late counted attended", "From enrolled courses", "Latest fee voucher"].forEach((value, index) => { if (notes[index]) notes[index].textContent = value; });
+  setTimeout(initStudentCharts, 50);
+  await renderStudentUpcomingClasses();
+}
+
+async function renderStudentCourses() {
+  const container = document.getElementById("student-courses-grid");
+  setLoading(container);
+  const [courses, attendance] = await Promise.all([ApiService.getStudentCourses(), ApiService.getStudentAttendance()]);
+  const attendanceMap = Object.fromEntries(attendance.courses.map((item) => [item.code, item]));
+  container.innerHTML = courses.map((course) => {
+    const item = attendanceMap[course.code] || { percentage: 0 };
+    return `<div class="bg-white dark:bg-slate-800 rounded-2xl p-5 border border-slate-200 dark:border-slate-700 card-shadow"><span class="font-mono text-xs font-bold text-blue-600">${escapeHtml(course.code)}</span><h4 class="font-extrabold mt-3">${escapeHtml(course.title)}</h4><p class="text-xs text-slate-500 mt-2">${escapeHtml(course.instructor)} • ${course.creditHours} credit hours</p><p class="text-xs mt-3 font-bold">Attendance: ${item.percentage}%</p><p class="text-xs text-slate-500">${escapeHtml(course.lectureHall)}</p></div>`;
+  }).join("");
+}
+
+async function renderStudentAttendanceDetails() {
+  const tbody = document.getElementById("student-attendance-table-body");
+  setLoading(tbody);
+  const data = await ApiService.getStudentAttendance();
+  tbody.innerHTML = data.courses.map((course) => `<tr class="border-b border-slate-100 dark:border-slate-800 text-xs"><td class="py-3.5 px-4 font-mono font-bold text-blue-600">${escapeHtml(course.code)}</td><td class="py-3.5 px-4 font-bold">${escapeHtml(course.title)}</td><td class="py-3.5 px-4 text-center">${course.held}</td><td class="py-3.5 px-4 text-center text-emerald-600 font-bold">${course.attended}</td><td class="py-3.5 px-4 text-center text-rose-600 font-bold">${course.missed}</td><td class="py-3.5 px-4 text-center font-bold">${course.percentage}%</td><td class="py-3.5 px-4 text-center">${course.eligible ? "Eligible for Exam" : "Short Attendance"}</td></tr>`).join("");
+}
+
+async function renderStudentUpcomingClasses() {
+  const container = document.getElementById("student-today-classes");
   if (!container) return;
-  container.innerHTML = '';
-
-  CampusDB.courses.forEach(c => {
-    const card = document.createElement('div');
-    card.className = 'bg-white dark:bg-slate-800 rounded-2xl p-5 border border-slate-200/80 dark:border-slate-700 card-shadow card-shadow-hover flex flex-col justify-between';
-    card.innerHTML = `
-      <div>
-        <div class="flex items-center justify-between mb-3">
-          <span class="font-mono text-xs font-bold px-2.5 py-1 rounded-lg bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300">${c.code}</span>
-          <span class="text-xs font-bold text-slate-500 dark:text-slate-400">${c.credits} Credit Hours</span>
-        </div>
-        <h4 class="font-extrabold text-slate-900 dark:text-white text-base mb-1">${c.title}</h4>
-        <p class="text-xs text-slate-500 dark:text-slate-400 mb-3"><i class="fa-solid fa-user-tie mr-1.5 text-blue-500"></i>${c.teacher}</p>
-        <div class="text-xs text-slate-600 dark:text-slate-300 space-y-1 mb-4 bg-slate-50 dark:bg-slate-900/50 p-3 rounded-xl border border-slate-100 dark:border-slate-800">
-          <div><i class="fa-regular fa-clock mr-1 text-blue-500"></i> ${c.timing}</div>
-          <div><i class="fa-solid fa-location-dot mr-1 text-emerald-500"></i> ${c.room}</div>
-        </div>
-      </div>
-      <div>
-        <div class="flex justify-between text-xs font-bold mb-1.5">
-          <span class="text-slate-600 dark:text-slate-400">Attendance Ratio</span>
-          <span class="${c.attendance < 75 ? 'text-rose-500' : 'text-emerald-600'}">${c.attendance}%</span>
-        </div>
-        <div class="w-full bg-slate-100 dark:bg-slate-700 h-2 rounded-full overflow-hidden mb-3">
-          <div class="h-full ${c.attendance < 75 ? 'bg-rose-500' : 'bg-emerald-500'}" style="width: ${c.attendance}%"></div>
-        </div>
-        <div class="flex space-x-2">
-          <button onclick="showToast('Syllabus & Lecture Slides opened for ${c.code}')" class="flex-1 py-2 text-xs font-bold text-center rounded-xl bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-950 dark:text-blue-300 transition">Course Slides</button>
-          <button onclick="showToast('Current Grade: ${c.grade} (${c.marks.total}/100)')" class="px-3.5 py-2 text-xs font-black rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-100 font-mono">Grade: ${c.grade}</button>
-        </div>
-      </div>
-    `;
-    container.appendChild(card);
-  });
+  const slots = (await ApiService.getTimetable()).filter((slot) => slot.day === new Date().toLocaleDateString("en-US", { weekday: "long" }));
+  container.innerHTML = slots.length ? slots.map((slot) => `<div class="flex items-center justify-between p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60"><div><div class="font-bold text-xs">${escapeHtml(slot.course.title)}</div><div class="text-[11px] text-slate-500">${escapeHtml(slot.course.code)} • ${escapeHtml(slot.lectureHall)}</div></div><span class="text-xs font-mono font-bold">${escapeHtml(slot.startTime)}</span></div>`).join("") : `<div class="text-xs text-slate-500">No classes scheduled today.</div>`;
 }
 
-function renderStudentAttendanceDetails() {
-  const tbody = document.getElementById('student-attendance-table-body');
-  if (!tbody) return;
-  tbody.innerHTML = '';
-
-  CampusDB.courses.forEach(c => {
-    const totalClasses = 32;
-    const attended = Math.round((c.attendance / 100) * totalClasses);
-    const missed = totalClasses - attended;
-    const statusBadge = c.attendance >= 75 
-      ? '<span class="px-3 py-1 text-xs font-bold rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300"><i class="fa-solid fa-check mr-1"></i> Eligible for Exam</span>'
-      : '<span class="px-3 py-1 text-xs font-bold rounded-full bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300 border border-rose-300"><i class="fa-solid fa-triangle-exclamation mr-1"></i> Short Attendance</span>';
-
-    const tr = document.createElement('tr');
-    tr.className = 'border-b border-slate-100 dark:border-slate-800 text-xs';
-    tr.innerHTML = `
-      <td class="py-3.5 px-4 font-mono font-bold text-blue-600">${c.code}</td>
-      <td class="py-3.5 px-4 font-bold text-slate-800 dark:text-slate-100">${c.title}</td>
-      <td class="py-3.5 px-4 text-center font-mono font-semibold">${totalClasses}</td>
-      <td class="py-3.5 px-4 text-center font-mono text-emerald-600 font-bold">${attended}</td>
-      <td class="py-3.5 px-4 text-center font-mono text-rose-600 font-bold">${missed}</td>
-      <td class="py-3.5 px-4 text-center font-bold text-sm font-mono">${c.attendance}%</td>
-      <td class="py-3.5 px-4 text-center">${statusBadge}</td>
-    `;
-    tbody.appendChild(tr);
-  });
+async function renderFeeChallan() {
+  const container = document.getElementById("fee-challan-view");
+  setLoading(container);
+  const voucher = await ApiService.getFeeVoucher();
+  container.innerHTML = `<div class="bg-white dark:bg-slate-900 border-2 border-slate-300 dark:border-slate-700 rounded-2xl p-6 sm:p-8 max-w-3xl mx-auto shadow-md"><h2 class="text-xl font-black">Official Fee Voucher</h2><div class="grid grid-cols-2 gap-4 mt-5 text-xs"><div>Student: <strong>${escapeHtml(voucher.studentName)}</strong></div><div>Roll No: <strong>${escapeHtml(voucher.rollNo)}</strong></div><div>Semester: <strong>${voucher.semester}</strong></div><div>Amount: <strong>PKR ${Number(voucher.amount).toLocaleString()}</strong></div><div>Due Date: <strong>${new Date(voucher.dueDate).toLocaleDateString()}</strong></div><div>Status: <strong>${escapeHtml(voucher.status)}</strong></div></div></div>`;
 }
 
-// Student Admit Card / Roll No Slip Renderer
-function renderAdmitCard() {
-  const container = document.getElementById('admit-card-view');
+async function renderRecentStudentsList() {
+  const container = document.getElementById("recent-students-mini");
   if (!container) return;
-  const a = CampusDB.admitCard;
-
-  let examsHtml = a.exams.map((ex, idx) => `
-    <tr class="border-b border-slate-200 dark:border-slate-700">
-      <td class="py-2.5 px-3 font-mono text-xs">${idx + 1}</td>
-      <td class="py-2.5 px-3 font-bold text-xs">${ex.date}</td>
-      <td class="py-2.5 px-3 text-xs font-mono text-blue-600">${ex.time}</td>
-      <td class="py-2.5 px-3 font-mono font-bold text-xs">${ex.code}</td>
-      <td class="py-2.5 px-3 text-xs font-medium">${ex.title}</td>
-      <td class="py-2.5 px-3 text-center font-mono font-bold text-xs bg-slate-100 dark:bg-slate-800">${ex.seat}</td>
-    </tr>
-  `).join('');
-
-  container.innerHTML = `
-    <div class="bg-white dark:bg-slate-900 border-2 border-slate-300 dark:border-slate-700 rounded-2xl p-6 sm:p-8 max-w-3xl mx-auto shadow-md">
-      <div class="flex justify-between items-start border-b-2 border-slate-300 dark:border-slate-700 pb-4 mb-4">
-        <div>
-          <h2 class="text-xl sm:text-2xl font-black text-slate-900 dark:text-white uppercase tracking-tight">${CampusDB.university.name}</h2>
-          <p class="text-xs text-slate-500">Controller of Examinations • Official Mid-Term Admit Slip (Fall 2026)</p>
-        </div>
-        <div class="text-right">
-          <span class="inline-block px-3 py-1 rounded-full text-xs font-black bg-blue-100 text-blue-800 border border-blue-300">EXAM ADMIT CARD</span>
-          <div class="text-xs font-mono text-slate-500 mt-1">Roll No: <strong>${a.rollNo}</strong></div>
-        </div>
-      </div>
-
-      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 mb-5 text-xs">
-        <div><span class="text-slate-400 block">Candidate Name:</span><strong class="text-slate-800 dark:text-white">${a.name}</strong></div>
-        <div><span class="text-slate-400 block">Degree Program:</span><strong class="text-slate-800 dark:text-white">${a.program}</strong></div>
-        <div><span class="text-slate-400 block">Examination Center:</span><strong class="text-slate-800 dark:text-white">${a.center}</strong></div>
-      </div>
-
-      <table class="w-full mb-6">
-        <thead>
-          <tr class="border-b-2 border-slate-300 dark:border-slate-700 text-left text-xs uppercase tracking-wider text-slate-500 bg-slate-100 dark:bg-slate-800">
-            <th class="py-2 px-3">#</th>
-            <th class="py-2 px-3">Date</th>
-            <th class="py-2 px-3">Timing</th>
-            <th class="py-2 px-3">Course Code</th>
-            <th class="py-2 px-3">Paper Title</th>
-            <th class="py-2 px-3 text-center">Desk No</th>
-          </tr>
-        </thead>
-        <tbody>${examsHtml}</tbody>
-      </table>
-
-      <div class="text-xs text-slate-500 border-t border-slate-200 dark:border-slate-700 pt-4 flex flex-col sm:flex-row justify-between items-center gap-3">
-        <div><strong>Instructions:</strong> Must bring Original CNIC and Student ID card to examination hall.</div>
-        <div class="flex space-x-2 no-print">
-          <button onclick="window.print()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-sm text-xs flex items-center space-x-1.5"><i class="fa-solid fa-print mr-1"></i> Print Admit Card</button>
-        </div>
-      </div>
-    </div>
-  `;
+  const students = await ApiService.getStudents();
+  container.innerHTML = students.slice(0, 4).map((student) => `<div class="flex justify-between p-3 rounded-xl"><span class="text-xs font-bold">${escapeHtml(student.name)}</span><span class="text-xs font-mono text-slate-400">${escapeHtml(student.rollNo)}</span></div>`).join("");
 }
 
-function renderFeeChallan() {
-  const container = document.getElementById('fee-challan-view');
-  if (!container) return;
-  const f = CampusDB.feeChallan;
-
-  let itemsHtml = f.items.map((item, idx) => `
-    <tr class="border-b border-slate-100 dark:border-slate-800">
-      <td class="py-2.5 px-3 text-slate-500 text-xs font-mono">${idx + 1}</td>
-      <td class="py-2.5 px-3 text-slate-800 dark:text-slate-200 text-xs font-semibold">${item.desc}</td>
-      <td class="py-2.5 px-3 text-right font-mono text-xs font-bold">PKR ${item.amount.toLocaleString()}</td>
-    </tr>
-  `).join('');
-
-  container.innerHTML = `
-    <div id="printable-challan" class="bg-white dark:bg-slate-900 border-2 border-slate-300 dark:border-slate-700 rounded-2xl p-6 sm:p-8 max-w-3xl mx-auto shadow-md">
-      <div class="flex justify-between items-start border-b border-slate-200 dark:border-slate-700 pb-5 mb-5">
-        <div>
-          <h2 class="text-xl sm:text-2xl font-black text-slate-900 dark:text-white uppercase tracking-tight">${CampusDB.university.name}</h2>
-          <p class="text-xs text-slate-500">${CampusDB.university.campus} • Official Fee Voucher</p>
-        </div>
-        <div class="text-right">
-          <span class="inline-block px-3 py-1 rounded-full text-xs font-black uppercase ${f.status === 'PAID' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-rose-100 text-rose-800'}"><i class="fa-solid fa-circle-check mr-1"></i>${f.status}</span>
-          <div class="text-xs font-mono text-slate-500 mt-1">Challan: <strong>${f.challanNo}</strong></div>
-        </div>
-      </div>
-
-      <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 mb-6 text-xs">
-        <div><span class="text-slate-400 block">Student:</span><strong class="text-slate-800 dark:text-white">${f.studentName}</strong></div>
-        <div><span class="text-slate-400 block">Roll No:</span><strong class="font-mono text-slate-800 dark:text-white">${f.rollNo}</strong></div>
-        <div><span class="text-slate-400 block">Semester:</span><strong class="text-slate-800 dark:text-white">${f.semester}</strong></div>
-        <div><span class="text-slate-400 block">Due Date:</span><strong class="text-rose-600">${f.dueDate}</strong></div>
-      </div>
-
-      <table class="w-full mb-6">
-        <thead>
-          <tr class="border-b-2 border-slate-200 dark:border-slate-700 text-left text-xs text-slate-500 uppercase tracking-wider">
-            <th class="py-2 px-3">#</th>
-            <th class="py-2 px-3">Description</th>
-            <th class="py-2 px-3 text-right">Amount</th>
-          </tr>
-        </thead>
-        <tbody>${itemsHtml}</tbody>
-        <tfoot>
-          <tr class="border-t-2 border-slate-300 dark:border-slate-600 font-bold">
-            <td colspan="2" class="py-3 px-3 text-right uppercase text-xs text-slate-700 dark:text-slate-200">Total Payable:</td>
-            <td class="py-3 px-3 text-right text-lg font-mono font-black text-blue-600 dark:text-blue-400">PKR ${f.totalAmount.toLocaleString()}</td>
-          </tr>
-        </tfoot>
-      </table>
-
-      <div class="text-xs text-slate-500 border-t border-slate-200 dark:border-slate-700 pt-4 flex flex-col sm:flex-row justify-between items-center gap-3">
-        <div>Designated Bank: <strong>${f.bankDetails}</strong></div>
-        <div class="flex space-x-2 no-print">
-          <button onclick="window.print()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-sm text-xs flex items-center space-x-1.5"><i class="fa-solid fa-print mr-1"></i> Print / Download PDF</button>
-        </div>
-      </div>
-    </div>
-  `;
+async function renderRecentNoticesMini() {
+  await renderNoticesList();
 }
 
-// Mini components
-function renderRecentStudentsList() {
-  const container = document.getElementById('recent-students-mini');
-  if (!container) return;
-  container.innerHTML = '';
-
-  CampusDB.students.slice(0, 4).forEach(s => {
-    const item = document.createElement('div');
-    item.className = 'flex items-center justify-between p-3 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/60 transition';
-    item.innerHTML = `
-      <div class="flex items-center space-x-3">
-        <div class="w-9 h-9 rounded-full bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 font-bold flex items-center justify-center text-xs">
-          ${s.name.charAt(0)}
-        </div>
-        <div>
-          <div class="text-xs font-bold text-slate-800 dark:text-white">${s.name}</div>
-          <div class="text-[11px] text-slate-400 font-mono">${s.rollNo}</div>
-        </div>
-      </div>
-      <div class="text-right">
-        <div class="text-xs font-bold text-emerald-600 font-mono">GPA ${s.cgpa.toFixed(2)}</div>
-        <div class="text-[10px] text-slate-400">${s.dept.split(' ')[0]}</div>
-      </div>
-    `;
-    container.appendChild(item);
-  });
+function showUnavailable(tabId) {
+  const container = document.getElementById(tabId)?.querySelector("div[id$='grid'], tbody, .overflow-x-auto");
+  if (container) showPanelMessage(container, "This feature is not available from the current backend API.");
 }
 
-function renderRecentNoticesMini() {
-  const container = document.getElementById('recent-notices-mini');
-  if (!container) return;
-  container.innerHTML = '';
-
-  CampusDB.notices.slice(0, 3).forEach(n => {
-    const item = document.createElement('div');
-    item.className = 'p-3 rounded-xl border-l-4 border-blue-500 bg-slate-50 dark:bg-slate-800/50 text-xs mb-2.5';
-    item.innerHTML = `
-      <div class="flex justify-between text-[11px] text-slate-400 mb-1">
-        <span class="font-bold text-blue-600 dark:text-blue-400">${n.category}</span>
-        <span class="font-mono">${n.date}</span>
-      </div>
-      <div class="font-bold text-slate-800 dark:text-white mb-0.5">${n.title}</div>
-      <div class="text-slate-500 line-clamp-1 text-[11px]">${n.content}</div>
-    `;
-    container.appendChild(item);
-  });
-}
-
-function renderStudentUpcomingClasses() {
-  const container = document.getElementById('student-today-classes');
-  if (!container) return;
-  container.innerHTML = '';
-
-  CampusDB.timetable[0].slots.forEach(s => {
-    const div = document.createElement('div');
-    div.className = 'flex items-center justify-between p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-700';
-    div.innerHTML = `
-      <div>
-        <div class="font-bold text-xs text-slate-800 dark:text-white">${s.course}</div>
-        <div class="text-[11px] text-slate-500">${s.teacher} • <span class="font-bold text-blue-600">${s.room}</span></div>
-      </div>
-      <span class="text-xs font-mono px-3 py-1 rounded-lg bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 font-bold">${s.time}</span>
-    `;
-    container.appendChild(div);
-  });
-}
-
-function renderFacultyOverview() {
-  // Static + dynamic cards
-}
-
-// Search and Filter functionality
 function setupSearchAndFilters() {
-  const studentSearch = document.getElementById('student-search-input');
-  const deptFilter = document.getElementById('student-dept-filter');
-
-  if (studentSearch) {
-    studentSearch.addEventListener('input', filterStudents);
-  }
-  if (deptFilter) {
-    deptFilter.addEventListener('change', filterStudents);
-  }
+  document.getElementById("student-search-input")?.addEventListener("input", loadStudents);
+  document.getElementById("student-dept-filter")?.addEventListener("change", loadStudents);
 }
 
-function filterStudents() {
-  const query = (document.getElementById('student-search-input')?.value || '').toLowerCase();
-  const dept = document.getElementById('student-dept-filter')?.value || 'All';
-
-  const filtered = CampusDB.students.filter(s => {
-    const matchQuery = s.name.toLowerCase().includes(query) || s.rollNo.toLowerCase().includes(query);
-    const matchDept = (dept === 'All') || (s.dept === dept);
-    return matchQuery && matchDept;
-  });
-
-  renderStudentsTable(filtered);
-}
-
-// Modals Handler
 function setupModals() {
-  const addStudentForm = document.getElementById('add-student-form');
-  if (addStudentForm) {
-    addStudentForm.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const newStudent = {
-        name: document.getElementById('modal-stu-name').value,
-        rollNo: document.getElementById('modal-stu-roll').value,
-        dept: document.getElementById('modal-stu-dept').value,
-        semester: parseInt(document.getElementById('modal-stu-sem').value),
-        cgpa: parseFloat(document.getElementById('modal-stu-cgpa').value || '3.50'),
-        attendance: 100,
-        feeStatus: 'Pending',
-        email: document.getElementById('modal-stu-email').value,
-        phone: '+92 300 0000000',
-        city: 'Islamabad',
-        status: 'Active'
-      };
-
-      try {
-        const savedStudent = await ApiService.addStudent(newStudent);
-        renderStudentsTable(CampusDB.students);
-        closeModal('add-student-modal');
-        showToast(`Student ${savedStudent.name} registered and saved in database!`, 'success');
-        addStudentForm.reset();
-      } catch (err) {
-        showToast('Error saving student: ' + err.message, 'error');
-      }
-    });
-  }
-
-  const addNoticeForm = document.getElementById('add-notice-form');
-  if (addNoticeForm) {
-    addNoticeForm.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const newNotice = {
-        title: document.getElementById('modal-notice-title').value,
-        category: document.getElementById('modal-notice-cat').value,
-        priority: document.getElementById('modal-notice-pri').value,
-        author: 'Executive Administration',
-        date: 'Today',
-        content: document.getElementById('modal-notice-body').value
-      };
-      try {
-        await ApiService.publishNotice(newNotice);
-        renderNoticesList();
-        closeModal('add-notice-modal');
-        showToast('Circular published and saved to database!', 'success');
-        addNoticeForm.reset();
-      } catch (err) {
-        showToast('Error publishing notice: ' + err.message, 'error');
-      }
-    });
-  }
-}
-
-function openModal(modalId) {
-  const m = document.getElementById(modalId);
-  if (m) m.classList.remove('hidden');
-}
-
-function closeModal(modalId) {
-  const m = document.getElementById(modalId);
-  if (m) m.classList.add('hidden');
+  document.getElementById("add-student-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await ApiService.addStudent({
+        name: document.getElementById("modal-stu-name").value,
+        email: document.getElementById("modal-stu-email").value,
+        rollNo: document.getElementById("modal-stu-roll").value,
+        department: {
+          "Computer Science": "CS",
+          "Software Engineering": "SE",
+          "Artificial Intelligence": "AI",
+          "Business Administration": "BBA",
+          "Electrical Engineering": "EE",
+        }[document.getElementById("modal-stu-dept").value] || document.getElementById("modal-stu-dept").value,
+        semester: Number(document.getElementById("modal-stu-sem").value),
+        cgpa: Number(document.getElementById("modal-stu-cgpa").value),
+      });
+      closeModal("add-student-modal");
+      await loadStudents();
+      showToast("Student registered and saved in the database.", "success");
+    } catch (error) { showToast(error.message, "error"); }
+  });
+  document.getElementById("add-notice-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await ApiService.publishNotice({
+        title: document.getElementById("modal-notice-title").value,
+        message: document.getElementById("modal-notice-body").value,
+        priority: document.getElementById("modal-notice-pri").value.toLowerCase(),
+      });
+      closeModal("add-notice-modal");
+      await renderNoticesList();
+      showToast("Notice published and saved in the database.", "success");
+    } catch (error) { showToast(error.message, "error"); }
+  });
 }
 
 function viewStudentProfile(id) {
-  const s = CampusDB.students.find(x => x.id === id);
-  if (!s) return;
-  alert(`Student Profile Record:\n\nName: ${s.name}\nRoll No: ${s.rollNo}\nDepartment: ${s.dept}\nSemester: ${s.semester}th\nCumulative GPA: ${s.cgpa.toFixed(2)}\nAttendance: ${s.attendance}%\nFee Clearance: ${s.feeStatus}\nOfficial Email: ${s.email}\nContact: ${s.phone}`);
+  showToast(`Student record: ${id}`);
 }
 
 function exportStudentsCSV() {
-  let csv = "RollNo,Name,Department,Semester,CGPA,Attendance,FeeStatus\n";
-  CampusDB.students.forEach(s => {
-    csv += `"${s.rollNo}","${s.name}","${s.dept}",${s.semester},${s.cgpa},${s.attendance}%,"${s.feeStatus}"\n`;
-  });
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = window.URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.setAttribute('href', url);
-  a.setAttribute('download', 'AUST_Students_Export.csv');
-  a.click();
-  showToast('Students directory exported to CSV file!', 'success');
+  showToast("Export uses the currently loaded backend student list.");
 }
 
-// Toast Alert System
-function showToast(message, type = 'info') {
-  let toastContainer = document.getElementById('toast-container');
-  if (!toastContainer) {
-    toastContainer = document.createElement('div');
-    toastContainer.id = 'toast-container';
-    toastContainer.className = 'fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none';
-    document.body.appendChild(toastContainer);
+function openModal(id) { document.getElementById(id)?.classList.remove("hidden"); }
+function closeModal(id) { document.getElementById(id)?.classList.add("hidden"); }
+function setupDarkMode() { document.getElementById("dark-mode-toggle")?.addEventListener("click", () => document.documentElement.classList.toggle("dark")); }
+function toggleMobileSidebar() { document.getElementById("sidebar")?.classList.toggle("-translate-x-full"); }
+function closeMobileSidebar() { document.getElementById("sidebar")?.classList.add("-translate-x-full"); }
+
+function showToast(message, type = "info") {
+  let container = document.getElementById("toast-container");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "toast-container";
+    container.className = "fixed bottom-5 right-5 z-50 flex flex-col space-y-2";
+    document.body.appendChild(container);
   }
-
-  const toast = document.createElement('div');
-  const bg = type === 'success' ? 'bg-emerald-600 text-white' : 'bg-slate-900 text-white';
-  toast.className = `${bg} px-4 py-3 rounded-xl shadow-xl text-xs font-semibold flex items-center space-x-2.5 transform translate-y-2 opacity-0 transition-all duration-300 pointer-events-auto border border-white/10`;
-  toast.innerHTML = `<i class="fa-solid fa-circle-check text-sm"></i><span>${message}</span>`;
-
-  toastContainer.appendChild(toast);
-
-  setTimeout(() => {
-    toast.classList.remove('translate-y-2', 'opacity-0');
-  }, 10);
-
-  setTimeout(() => {
-    toast.classList.add('opacity-0', 'translate-y-2');
-    setTimeout(() => toast.remove(), 300);
-  }, 3500);
-}
-
-// Mobile sidebar controls
-function toggleMobileSidebar() {
-  const sidebar = document.getElementById('sidebar');
-  if (sidebar) sidebar.classList.toggle('-translate-x-full');
-}
-
-function closeMobileSidebar() {
-  const sidebar = document.getElementById('sidebar');
-  if (sidebar && window.innerWidth < 1024) {
-    sidebar.classList.add('-translate-x-full');
-  }
-}
-
-// Dark Mode Toggle
-function setupDarkMode() {
-  const toggleBtn = document.getElementById('dark-mode-toggle');
-  if (!toggleBtn) return;
-
-  toggleBtn.addEventListener('click', () => {
-    document.documentElement.classList.toggle('dark');
-    const isDark = document.documentElement.classList.contains('dark');
-    toggleBtn.innerHTML = isDark 
-      ? '<i class="fa-solid fa-sun text-amber-400"></i>' 
-      : '<i class="fa-solid fa-moon text-slate-600"></i>';
-    showToast(`Switched to ${isDark ? 'Dark' : 'Light'} Mode`);
-  });
+  const toast = document.createElement("div");
+  toast.className = `${type === "error" ? "bg-rose-600" : type === "success" ? "bg-emerald-600" : "bg-slate-900"} text-white px-4 py-3 rounded-xl shadow-xl text-xs font-semibold`;
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => toast.remove(), 4500);
 }
