@@ -712,10 +712,9 @@ function filterStudents() {
 function setupModals() {
   const addStudentForm = document.getElementById('add-student-form');
   if (addStudentForm) {
-    addStudentForm.addEventListener('submit', (e) => {
+    addStudentForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const newStudent = {
-        id: 'STU-' + (CampusDB.students.length + 101),
         name: document.getElementById('modal-stu-name').value,
         rollNo: document.getElementById('modal-stu-roll').value,
         dept: document.getElementById('modal-stu-dept').value,
@@ -729,20 +728,23 @@ function setupModals() {
         status: 'Active'
       };
 
-      CampusDB.students.unshift(newStudent);
-      renderStudentsTable(CampusDB.students);
-      closeModal('add-student-modal');
-      showToast(`Student ${newStudent.name} registered successfully!`, 'success');
-      addStudentForm.reset();
+      try {
+        const savedStudent = await ApiService.addStudent(newStudent);
+        renderStudentsTable(CampusDB.students);
+        closeModal('add-student-modal');
+        showToast(`Student ${savedStudent.name} registered and saved in database!`, 'success');
+        addStudentForm.reset();
+      } catch (err) {
+        showToast('Error saving student: ' + err.message, 'error');
+      }
     });
   }
 
   const addNoticeForm = document.getElementById('add-notice-form');
   if (addNoticeForm) {
-    addNoticeForm.addEventListener('submit', (e) => {
+    addNoticeForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const newNotice = {
-        id: CampusDB.notices.length + 1,
         title: document.getElementById('modal-notice-title').value,
         category: document.getElementById('modal-notice-cat').value,
         priority: document.getElementById('modal-notice-pri').value,
@@ -750,11 +752,15 @@ function setupModals() {
         date: 'Today',
         content: document.getElementById('modal-notice-body').value
       };
-      CampusDB.notices.unshift(newNotice);
-      renderNoticesList();
-      closeModal('add-notice-modal');
-      showToast('Circular published to Campus Notice Board!', 'success');
-      addNoticeForm.reset();
+      try {
+        await ApiService.publishNotice(newNotice);
+        renderNoticesList();
+        closeModal('add-notice-modal');
+        showToast('Circular published and saved to database!', 'success');
+        addNoticeForm.reset();
+      } catch (err) {
+        showToast('Error publishing notice: ' + err.message, 'error');
+      }
     });
   }
 }
