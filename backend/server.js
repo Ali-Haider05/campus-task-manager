@@ -1,6 +1,8 @@
 
 import "dotenv/config";
 import dns from "node:dns";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import cors from "cors";
 import express from "express";
 import connectDB from "./src/config/db.js";
@@ -19,6 +21,7 @@ dns.setServers(["8.8.8.8", "1.1.1.1"]);
 
 const app = express();
 const port = process.env.PORT || 5000;
+const frontendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const allowedOrigins = new Set([
   "http://127.0.0.1:5500",
@@ -30,7 +33,10 @@ const allowedOrigins = new Set([
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.has(origin)) {
+      const configuredFrontend = process.env.FRONTEND_URL;
+      const isVercelFrontend = /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin || "");
+
+      if (!origin || allowedOrigins.has(origin) || origin === configuredFrontend || isVercelFrontend) {
         callback(null, true);
         return;
       }
@@ -39,6 +45,18 @@ app.use(
   }),
 );
 app.use(express.json());
+app.use(express.static(frontendRoot));
+app.get("/", (req, res) => {
+  res.sendFile(path.join(frontendRoot, "index.html"));
+});
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
 app.use("/api/health", healthRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
@@ -62,4 +80,8 @@ const startServer = async () => {
   }
 };
 
-startServer();
+if (process.env.VERCEL !== "1") {
+  startServer();
+}
+
+export default app;

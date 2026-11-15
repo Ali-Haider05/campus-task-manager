@@ -1,4 +1,25 @@
 {
   "version": 2,
-  "cleanUrls": true
+  "builds": [
+    {
+      "src": "api/index.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/api/index.js"
+    }
+  ],
+  "functions": {
+    "api/index.js": {
+      "includeFiles": [
+        "index.html",
+        "css/**",
+        "js/**",
+        "frontend/**"
+      ]
+    }
+  }
 }
